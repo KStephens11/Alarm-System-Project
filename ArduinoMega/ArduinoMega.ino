@@ -72,7 +72,6 @@ const int ZONE[2] = {10,24};
 const int ZONEDR[2] = {42,44};
 
 // Variables used to hold the values of the alarms state and the zone states
-int ON_OFF_STATE;
 int ENTRY_EXIT_STATE;
 int ZONE_STATE[2];
 int ZONEDR_STATE[2];
@@ -107,9 +106,8 @@ void setup() {
 
   //Tell esp that alarm is disarmed and no zones active on startup
   Serial1.write(DSARM);
-  Serial1.flush();
   Serial1.write(NZONE);
-  
+  Serial1.flush();
 }
 
 // Main loop
@@ -159,9 +157,6 @@ void loop() {
       }
       //Check if zone door has been activated
       if(ZONEDR_STATE[x]) {
-        //Serial.print("Zone ");
-        //Serial.print(x);
-        //Serial.println(" Activated");
         Serial.write(246-x);
         Serial1.write(246-x);
         ZONE_ACTIVATED = HIGH;
@@ -173,23 +168,21 @@ void loop() {
 
   // This checks if the alarm is activated and if one of the zones are activated, if so it will flash the LED
   // ans starts playing the buzzer. It will look for the keypads input, which is inside the myDelay function
-  // RFID was not added intentionally so the alarm will only be deactivated once tripped with the keypad
   while(ON_OFF_ACTIVATED&&ENTRY_EXIT_ACTIVATED||ON_OFF_ACTIVATED&&ZONE_ACTIVATED) {
-    flash();
-    tone(SPEAKER, 10000, 100);
+    soundAlarm();
     myDelay(100);
-    noTone(SPEAKER);
-    myRFID();
   }
 
 }
 
-// Function to flash the LED, has a one second delay between each state
-void flash() {
+// Function to sound to play the buzzer and light led
+void soundAlarm() {
+  tone(SPEAKER, 4000, 500); // buzzer plays noise at 4000hz for 500ms
   digitalWrite(LED, HIGH);  // turn the LED on (HIGH is the voltage level)
-  myDelay(1000);                      // wait for a second
+  myDelay(500);             // wait 500ms
   digitalWrite(LED, LOW);   // turn the LED off by making the voltage LOW
-  myDelay(1000);                      // wait for a second
+  noTone(SPEAKER);          // speaker is set to not play anything
+  myDelay(500);             // wait 500ms
 }
 
 // Function used to countdown from the defined period to 0
@@ -197,7 +190,6 @@ void countdown(int period){
   period++;
   int x = 0;
   while(x<period){
-    //Serial.print("Countdown "); Serial.println(period-x);
     // need to add 10 to stop conflict with keypad
     Serial.write((period-x) + 10);
     Serial.flush();
@@ -209,10 +201,10 @@ void countdown(int period){
 }
 
 // Function used as an alternative to the delay() function
-// myKey function included to allow keypad input during a delay
+// myKey, myESP and myRFID are checked during the delay to ensure it is always checked.
 void myDelay(int period) {
   unsigned long timeNow = millis();
-  while (millis() < timeNow + period) {myKey();myESP();}
+  while (millis() < timeNow + period) {myKey();myESP();myRFID();}
 }
 
 // Function to start the process of taking inputs from the keypad, processing the keys and checking the password
@@ -271,19 +263,13 @@ void myRFID() {
         if (rfid.uid.uidByte[i] == rfidBytes[i]){
           readBytes++;
         }
-      }
 
-      if (readBytes == 4) {
-        myDelay(1000);
-        alarmSet();
-        readBytes=0;
-        for(int i = 0; i < 4; i++ ){
-          rfid.uid.uidByte[i] == 0;
+        if (readBytes == 4) {
+          delay(1000);
+          alarmSet();
+          readBytes=0;
         }
       }
-
-      
-      
   }
 }
 
@@ -315,10 +301,6 @@ void myESP(){
     int mes = Serial1.read();
     if (mes == STATE) {
       alarmSet();
-    }
-
-    if (mes < 11 & mes >= 1) {
-      processNumberKey(mes - 1);
     }
   }
 }
