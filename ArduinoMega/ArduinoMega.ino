@@ -2,7 +2,6 @@
 #include <Keypad.h>
 #include <Password.h>
 #include <MFRC522.h>
-//https://github.com/miguelbalboa/rfid
 #include "SR04.h"
 
 // Defines the Slave Select pin and reset pin numbers, control the communication between the arduino and the RFID scanner
@@ -60,15 +59,13 @@ Password password = Password("1234");
 // Creates object for the ultrasonic sensor called sr04 using trig and echo pins.
 SR04 sr04 = SR04(ECHO_PIN,TRIG_PIN);
 
-// Pins for sensors and led
+// Pins for speaker and LED
 const int LED = LED_BUILTIN;
 const int SPEAKER = 48;
 
-// Pins for arming the alarm and its zones
-//const int ON_OFF = 12;
+// Pins for Entry exit and zones
 const int ENTRY_EXIT = 11;
 const int ZONE[2] = {10,24};
-// Zone 0 door is pin 44 and 1 is 42
 const int ZONEDR[2] = {42,44};
 
 // Variables used to hold the values of the alarms state and the zone states
@@ -85,9 +82,13 @@ int ZONE_ACTIVATED = LOW;
 long distance;
 int readBytes;
 
+// Used to keep track of the time just before the alarm enters the while loop when it trips
+unsigned long timeNowAlarm;
+
 void setup() {
-  Serial.begin(57600); // Starts serial connection
-  Serial1.begin(115200); // Start serial connection with esp8266
+  // Start serial connections with ESP and processing
+  Serial.begin(57600); // For processing
+  Serial1.begin(115200); // For ESP
   SPI.begin(); // Initializes the SPI bus, used to communicate with the rfid scanner
   rfid.PCD_Init(); // Initializes the RFID Scanner
 
@@ -119,28 +120,32 @@ void loop() {
   // Call function to check if RFID has scanned a card, will arm and disarm the alarm if scanned.
   myRFID();
 
-  // Calls function to check keypad and what is entered and if it matches the password. If it matches the alarm arms.
+  // Calls function to check keypad and what is entered, if it matches the password the alarm is armed.
   myKey();
 
-  // When the alarm is activated it will begin checking the Entry exit and zones
+  // When the alarm has beeen activated the programme will enter this if statement
   if(ON_OFF_ACTIVATED) {
 
+    // Check distance of the ultrasonic sensor
     distance = sr04.Distance();
 
-    // Check if entry exit zone has been activated
+    // Read entry exit sensor
     ENTRY_EXIT_STATE = digitalRead(ENTRY_EXIT);
 
-    // Checks if the one of the zones were activated
+    // Reads the sensors for the zones sensors and doors
     for (int x = 0; x < 2; x++) {
       ZONE_STATE[x] = digitalRead(ZONE[x]);
       ZONEDR_STATE[x] = digitalRead(ZONEDR[x]);
     }
 
-    // When the entry exit zone is activated it will countdown 10 seconds to allow the person to enter the password
+    // Executed when entry exit is opened
     if(ENTRY_EXIT_STATE) {
+      // Count down from 10 seconds to give time for user to enter password and disarm the alarm.
       countdown(10);
-      Serial.write(ENTRY);
+      // Entry Exit Activates alarm, will be overwritten if the alarm is disarmed.
       ENTRY_EXIT_ACTIVATED = HIGH;
+      // Write to ESP and Processing
+      Serial.write(ENTRY);
       Serial1.write(ENTRY);
     }
     // Check Ultrasonic sensor if there is an object within 8cm
@@ -151,37 +156,61 @@ void loop() {
     // For loop to check if a zone has been activated
     for (int x = 0; x < 2; x++) {
       if(ZONE_STATE[x]) {
+        // Write to ESP and Processing
         Serial.write(250-x);
         Serial1.write(250-x);
+        // Zone Activated
         ZONE_ACTIVATED = HIGH;
       }
       //Check if zone door has been activated
       if(ZONEDR_STATE[x]) {
+        // Write to ESP and Processing
         Serial.write(246-x);
         Serial1.write(246-x);
+        // Zone Activated
         ZONE_ACTIVATED = HIGH;
       }
 
     }
-
+    
   }
+  // Saves current time until the alarm enters the while loop
+  timeNowAlarm = millis();
 
-  // This checks if the alarm is activated and if one of the zones are activated, if so it will flash the LED
-  // ans starts playing the buzzer. It will look for the keypads input, which is inside the myDelay function
+  // This checks if the alarm is activated and if one of the zones or entry exit is activated
+  // Will play sound the alarm and get input to disarm from Keypad, RFID and ESP
   while(ON_OFF_ACTIVATED&&ENTRY_EXIT_ACTIVATED||ON_OFF_ACTIVATED&&ZONE_ACTIVATED) {
-    soundAlarm();
-    myDelay(100);
+    // playSpeaker will halt flashLED until it is done, this will make the led flash only after the speaker is done.
+    playSpeaker(10000);
+    // Flashes LED
+    flashLED();
+    // Check rfid as its not included in myDelay
+    myRFID();
+    // My delay checks Keypad and ESP
+    myDelay(1000);
+   
   }
 
 }
 
-// Function to sound to play the buzzer and light led
-void soundAlarm() {
-  tone(SPEAKER, 4000, 500); // buzzer plays noise at 4000hz for 500ms
+// Function to play speaker, will only play for specified lenght of time.
+void playSpeaker(int limit) {
+  // Checks if the current time is less than the time saved before the loop plus the lenght of time it will play for.
+  while (millis() < timeNowAlarm + limit) {
+    myRFID();                 // Check rfid
+    tone(SPEAKER, 4000, 500); // buzzer plays noise at 4000hz for 500ms
+    myDelay(1000);            // wait 1 second
+    myRFID();                 // check rfid
+    noTone(SPEAKER);          // speaker is set to not play anything
+    myDelay(1000);            // wait 1 seconc
+  }
+}
+
+// Function to flash LED
+void flashLED() {
   digitalWrite(LED, HIGH);  // turn the LED on (HIGH is the voltage level)
   myDelay(500);             // wait 500ms
   digitalWrite(LED, LOW);   // turn the LED off by making the voltage LOW
-  noTone(SPEAKER);          // speaker is set to not play anything
   myDelay(500);             // wait 500ms
 }
 
@@ -189,23 +218,28 @@ void soundAlarm() {
 void countdown(int period){
   period++;
   int x = 0;
+  // x will count upwards until it matches with period
   while(x<period){
     // need to add 10 to stop conflict with keypad
+    // Sends period-x to have the values count downwards
     Serial.write((period-x) + 10);
     Serial.flush();
     Serial1.write((period-x) + 10);
     myDelay(1000);
+    // Checks RFID card
+    myRFID();
     x++;
   }
 
 }
 
 // Function used as an alternative to the delay() function
-// myKey, myESP and myRFID are checked during the delay to ensure it is always checked.
+// myKey and myESP are checked. myRFID does not.
 void myDelay(int period) {
   unsigned long timeNow = millis();
-  while (millis() < timeNow + period) {myKey();myESP();myRFID();}
+  while (millis() < timeNow + period) {myKey();myESP();}
 }
+
 
 // Function to start the process of taking inputs from the keypad, processing the keys and checking the password
 // It sends its inputted key to the processNumberKey function and start the checkPassword and resetPassword function
@@ -225,7 +259,7 @@ void myKey(){
    }
 }
 
-// Function used to process the inputted keys, used to print the inputted key and to keep track of the password kenght and append keys to the password
+// Function used to process the inputted keys, used to print the inputted key and to keep track of the password lenght and append keys to the password
 // When password is above the max password length it will start the checkPassword function
 void processNumberKey(char key) {
    Serial.write((key+1)-'0');
@@ -256,49 +290,67 @@ void resetPassword() {
 // Function to check if there is a new card detected, scan the card and check if the uid bytes matches the ones set by rfidBytes
 // if it matches x is incremented, if x == 4, a one second delay is called and then alarmSet
 void myRFID() {
+    //Check if there is new card
     if (rfid.PICC_IsNewCardPresent()) {
+      // Read the card
       rfid.PICC_ReadCardSerial();
+      // Set readBytes to 0 before reading
       readBytes = 0;
+      // For loop to compare stored uid bytes with scanned rfid cards bytes
       for(int i = 0; i < 4; i++ ){
         if (rfid.uid.uidByte[i] == rfidBytes[i]){
+          // Increment every match
           readBytes++;
         }
-
+        // Once all matches delay for 1 second and set toggle alarm
         if (readBytes == 4) {
-          delay(1000);
+          myDelay(1000);
           alarmSet();
-          readBytes=0;
         }
       }
   }
 }
 
-// Function to arm and disarm the alarm, the function will toggle ON_OFF_ACTIVATED and print a message depending on if it has been toggled to 0 or 1
+// Function to arm and disarm the alarm, the function will toggle ON_OFF_ACTIVATED to achieve this. Will send status to esp and processing
 // The fucntion also sets the zones to low
 // A countdown of 8 seconds is set when armed to allow the person to leave the building
 void alarmSet(){
+  // toggle alarm state and set zones and exit entry to low
   ON_OFF_ACTIVATED = !ON_OFF_ACTIVATED;
   ENTRY_EXIT_ACTIVATED = LOW;
   ZONE_ACTIVATED = LOW;
+  // Write NoZones to ESP and Processing
   Serial1.write(NZONE);
   Serial.write(NZONE);
+  Serial1.flush();
   Serial.flush();
+  // If the zone is now toggled to armed
   if (ON_OFF_ACTIVATED) {
+    // Send event code armed to esp and processing
     Serial.write(ARMED);
-    Serial.flush();
     Serial1.write(ARMED);
+    Serial1.flush();
+    Serial.flush();
+    // Count down from 8 seconds giving time to leave
     countdown(8);
   }
+  // If alarm is now toggled to disarm
   else {
+    // Send disarm event to ESP and Processing
     Serial.write(DSARM);
-    Serial.flush();
     Serial1.write(DSARM);
+    Serial1.flush();
+    Serial.flush();
   }
 }
 
+// Fucntion to check if there is any input from the blynk app through the ESP
 void myESP(){
+  // While loop to read all data that has been sent
   while(Serial1.available()>0) {
+    // stores data as mes
     int mes = Serial1.read();
+    // If the message was the event code state the toggle the alarm.
     if (mes == STATE) {
       alarmSet();
     }
